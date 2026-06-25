@@ -1,9 +1,10 @@
 <?php
 /**
  * Plugin Name: Order Lookup
- * Description: Retourformulier op basis van ordernummer + e-mailadres. Gebruik shortcode [order_lookup] of [order_lookup admin_email="info@website.nl"] op elke pagina.
- * Version:     1.12
+ * Description: Retourformulier op basis van ordernummer + e-mailadres. Gebruik shortcode [order_lookup] of [order_lookup admin_email="info@jouwsite.nl"] op elke pagina.
+ * Version:     1.14
  * Author:      Lamper Design
+ * Plugin URI:  https://github.com/lamperdesign/order-lookup
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -29,9 +30,9 @@ add_filter( 'wp_mail_from_name', function ( $name ) {
 add_action( 'wp_enqueue_scripts', function () {
     wp_enqueue_script(
         'order-lookup',
-        WPMU_PLUGIN_URL . '/order-lookup/assets/js/order-lookup.js',
+        plugin_dir_url( __FILE__ ) . 'assets/js/order-lookup.js',
         [ 'jquery' ],
-        '1.9',
+        '1.12',
         true
     );
     wp_localize_script( 'order-lookup', 'orderLookup', [
@@ -40,14 +41,26 @@ add_action( 'wp_enqueue_scripts', function () {
     ] );
 } );
 
-// ─── 3. Hulpfunctie: order zoeken op bestelnummer ────────────────────────────
+// ─── 3. Hulpfunctie: prefix strippen ─────────────────────────────────────────
+// Verwijdert landcode-prefixen (NL, BE, DE, FR, EN, NO, IT, ES, AT, NZ, etc.)
+// én de oude FL-prefix. Klant kan zowel "NL12345" als "12345" invoeren.
+
+function order_lookup_strip_prefix( $order_number ) {
+    return preg_replace( '/^[A-Z]{2,3}/i', '', strtoupper( trim( $order_number ) ) );
+}
+
+// ─── 4. Hulpfunctie: order zoeken op bestelnummer ────────────────────────────
 
 function order_lookup_find_by_number( $order_number ) {
-    $direct = wc_get_order( intval( $order_number ) );
-    if ( $direct && $direct->get_order_number() == $order_number ) {
+    $numeric_id = order_lookup_strip_prefix( $order_number );
+
+    // Directe lookup op post/order ID
+    $direct = wc_get_order( intval( $numeric_id ) );
+    if ( $direct && is_a( $direct, 'WC_Order' ) ) {
         return $direct;
     }
 
+    // Fallback: meta-zoekopdracht (voor plugins die _order_number opslaan)
     $orders = wc_get_orders( [
         'limit'      => 1,
         'meta_key'   => '_order_number',
@@ -57,7 +70,7 @@ function order_lookup_find_by_number( $order_number ) {
     return ! empty( $orders ) ? $orders[0] : false;
 }
 
-// ─── 4. Rate limiting hulpfunctie ────────────────────────────────────────────
+// ─── 5. Rate limiting hulpfunctie ────────────────────────────────────────────
 
 function order_lookup_check_rate_limit() {
     $ip   = sanitize_text_field( $_SERVER['REMOTE_ADDR'] ?? 'unknown' );
@@ -71,7 +84,7 @@ function order_lookup_check_rate_limit() {
     set_transient( $key, $hits + 1, 5 * MINUTE_IN_SECONDS );
 }
 
-// ─── 5. AJAX: producten ophalen ──────────────────────────────────────────────
+// ─── 6. AJAX: producten ophalen ──────────────────────────────────────────────
 
 add_action( 'wp_ajax_get_order_products',        'order_lookup_ajax' );
 add_action( 'wp_ajax_nopriv_get_order_products', 'order_lookup_ajax' );
@@ -81,7 +94,7 @@ function order_lookup_ajax() {
     order_lookup_check_rate_limit();
 
     $order_number = sanitize_text_field( $_POST['order_id'] ?? '' );
-    $order_number = preg_replace( '/^FL/i', '', strtoupper( $order_number ) );
+    $order_number = order_lookup_strip_prefix( $order_number ); // strip landcode- én FL-prefix
     $email        = sanitize_email( $_POST['email'] ?? '' );
 
     if ( ! $order_number || ! $email ) {
@@ -105,12 +118,12 @@ function order_lookup_ajax() {
     }
 
     wp_send_json_success( [
-        'order_number' => $order->get_order_number(),
+        'order_number' => $order->get_order_number(), // geeft bijv. NL12345 terug
         'items'        => $items,
     ] );
 }
 
-// ─── 6. AJAX: retourverzoek versturen ────────────────────────────────────────
+// ─── 7. AJAX: retourverzoek versturen ────────────────────────────────────────
 
 add_action( 'wp_ajax_submit_return_request',        'order_return_ajax' );
 add_action( 'wp_ajax_nopriv_submit_return_request', 'order_return_ajax' );
@@ -135,6 +148,7 @@ function order_return_ajax() {
         wp_send_json_error( 'Ongeldige aanvraag.' );
     }
 
+    // order_number is het getoonde nummer (bijv. NL12345), strip prefix voor lookup
     $order = order_lookup_find_by_number( $order_number );
 
     if ( ! $order || strtolower( $order->get_billing_email() ) !== strtolower( $email ) ) {
@@ -191,7 +205,7 @@ function order_return_ajax() {
     wp_send_json_success( 'Retourverzoek verstuurd. Je ontvangt een bevestiging per e-mail.' );
 }
 
-// ─── 7. Shortcode [order_lookup] ─────────────────────────────────────────────
+// ─── 8. Shortcode [order_lookup] ─────────────────────────────────────────────
 
 add_shortcode( 'order_lookup', function ( $atts ) {
     $atts = shortcode_atts( [
@@ -218,9 +232,9 @@ add_shortcode( 'order_lookup', function ( $atts ) {
     return ob_get_clean();
 } );
 
-// ─── 8. Link in klassieke WooCommerce order-mails via wp_mail filter ──────────
+// ─── 9. Link in klassieke WooCommerce order-mails via wp_mail filter ──────────
 // (werkt niet met de nieuwe block-gebaseerde WooCommerce email editor —
-//  gebruik daarvoor sectie 9: de custom personalization tag)
+//  gebruik daarvoor sectie 10: de custom personalization tag)
 
 add_action( 'woocommerce_email_customer_on_hold_order',    'order_lookup_set_inject', 10, 3 );
 add_action( 'woocommerce_email_customer_completed_order',  'order_lookup_set_inject', 10, 3 );
@@ -247,7 +261,7 @@ function order_lookup_inject_mail_link( $args ) {
     return $args;
 }
 
-// ─── 9. Custom personalization tag voor nieuwe WooCommerce email editor ───────
+// ─── 10. Custom personalization tag voor nieuwe WooCommerce email editor ───────
 // Voeg in de email editor een knop-blok toe met als URL: <!--[order-lookup/return-url]-->
 // De tag is ook beschikbaar via het personalization tags menu (categorie "Order").
 
@@ -275,7 +289,7 @@ add_filter( 'woocommerce_email_editor_register_personalization_tags', function (
     return $registry;
 } );
 
-// ─── 10. Custom placeholder {return_url} voor klassieke WooCommerce email editor ──
+// ─── 11. Custom placeholder {return_url} voor klassieke WooCommerce email editor ──
 // Typ {return_url} in het veld "Aanvullende inhoud" van een WooCommerce e-mailtype.
 // Voorbeeld: <a href="{return_url}">Ik wil mijn bestelling herroepen</a>
 
@@ -296,7 +310,68 @@ add_filter( 'woocommerce_email_format_string', function ( $string, $email ) {
     return str_replace( '{return_url}', esc_url( $return_url ), $string );
 }, 10, 2 );
 
-// ─── 11. Knop "Herroepen" in Mijn account → Bestellingen ──────────────────────
+// ─── 12. Deactiveren blokkeren (gedraagt zich als MU-plugin) ─────────────────
+
+add_filter( 'plugin_action_links_order-lookup/order-lookup.php', function ( $actions ) {
+    unset( $actions['deactivate'] );
+    return $actions;
+} );
+
+// ─── 13. GitHub update checker ───────────────────────────────────────────────
+
+add_filter( 'pre_set_site_transient_update_plugins', 'order_lookup_check_github_update' );
+
+function order_lookup_check_github_update( $transient ) {
+    if ( empty( $transient->checked ) ) return $transient;
+
+    $plugin_slug     = 'order-lookup/order-lookup.php';
+    $github_user     = 'LamperDesign'; // ← aanpassen
+    $github_repo     = 'order-lookup';          // ← aanpassen indien anders
+
+    $current_version = $transient->checked[ $plugin_slug ] ?? null;
+    if ( ! $current_version ) return $transient;
+
+    // GitHub API: nieuwste release ophalen (6 uur gecached)
+    $cache_key = 'order_lookup_github_update';
+    $release   = get_transient( $cache_key );
+
+    if ( false === $release ) {
+        $api_url  = "https://api.github.com/repos/{$github_user}/{$github_repo}/releases/latest";
+        $response = wp_remote_get( $api_url, [
+            'headers' => [ 'User-Agent' => 'WordPress/' . get_bloginfo( 'version' ) ],
+            'timeout' => 10,
+        ] );
+
+        if ( is_wp_error( $response ) ) return $transient;
+
+        $release = json_decode( wp_remote_retrieve_body( $response ) );
+        if ( empty( $release->tag_name ) ) return $transient;
+
+        set_transient( $cache_key, $release, 6 * HOUR_IN_SECONDS );
+    }
+
+    // Tag "v1.12" → "1.12"
+    $latest_version = ltrim( $release->tag_name, 'v' );
+
+    if ( version_compare( $latest_version, $current_version, '>' ) ) {
+        $transient->response[ $plugin_slug ] = (object) [
+            'slug'        => 'order-lookup',
+            'plugin'      => $plugin_slug,
+            'new_version' => $latest_version,
+            'url'         => "https://github.com/{$github_user}/{$github_repo}",
+            'package'     => $release->zipball_url,
+        ];
+    }
+
+    return $transient;
+}
+
+// Cache legen na een update
+add_action( 'upgrader_process_complete', function () {
+    delete_transient( 'order_lookup_github_update' );
+}, 10, 0 );
+
+// ─── 14. Knop "Herroepen" in Mijn account → Bestellingen ──────────────────────
 
 add_filter( 'woocommerce_my_account_my_orders_actions', function ( $actions, $order ) {
     $return_url = home_url( '/bestelling-herroepen/' )
