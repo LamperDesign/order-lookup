@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: Order Lookup
- * Description: Retourformulier op basis van ordernummer + e-mailadres. Gebruik shortcode [order_lookup] of [order_lookup admin_email="info@jouwsite.nl"] op elke pagina.
- * Version:     1.11
+ * Description: Retourformulier op basis van ordernummer + e-mailadres. Gebruik shortcode [order_lookup] of [order_lookup admin_email="info@website.nl"] op elke pagina.
+ * Version:     1.12
  * Author:      Lamper Design
  */
 
